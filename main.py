@@ -1,9 +1,44 @@
 import os
 import discord
-from discord.ext import commands
-from datetime import timedelta
+from discord.ext import commands, tasks
+from datetime import timedelta, datetime, timezone
+from collections import defaultdict, deque
 
 MODMAIL_CHANNEL_ID = 1393229169751752766
+ADMIN_CHANNEL_ID = 1393229169751752766
+
+# ---------------------------------------------------------------------------
+# Automod configuration
+# ---------------------------------------------------------------------------
+# Roles (by name, case-insensitive) that are exempt from automod.
+EXEMPT_ROLE_NAMES = {"admin", "administrator", "moderator", "mod", "staff"}
+
+# Spam thresholds: (max_messages, within_seconds)
+SPAM_THRESHOLDS = [
+    (5, 5),   # 5 messages in 5 seconds
+    (10, 10), # 10 messages in 10 seconds
+]
+
+# Identical-message repeat window (seconds)
+DUPLICATE_WINDOW = 3
+
+# Timeout duration applied to spammers (minutes)
+AUTOMOD_TIMEOUT_MINUTES = 10
+
+# How long (seconds) to suppress repeat punishments for the same user
+PUNISHMENT_COOLDOWN = 60
+
+# ---------------------------------------------------------------------------
+# In-memory automod state
+# ---------------------------------------------------------------------------
+# { (user_id, channel_id): deque of UTC datetime objects }
+_message_timestamps: dict[tuple[int, int], deque] = defaultdict(deque)
+
+# { (user_id, channel_id): deque of (content, UTC datetime) tuples }
+_message_contents: dict[tuple[int, int], deque] = defaultdict(deque)
+
+# { user_id: UTC datetime } — when the user was last punished
+_punishment_cooldowns: dict[int, datetime] = {}
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -78,14 +113,189 @@ class SubmitApplicationView(discord.ui.View):
             await admin_channel.send(embed=embed)
 
 
+def _is_exempt(member: discord.Member) -> bool:
+    """Return True if the member holds an admin/mod role and should skip automod."""
+    return any(r.name.lower() in EXEMPT_ROLE_NAMES for r in member.roles)
+
+
+def _check_spam(user_id: int, channel_id: int, content: str) -> str | None:
+    """
+    Record the new message and return a human-readable spam reason if the
+    user is spamming, or None if everything looks fine.
+    """
+    now = datetime.now(timezone.utc)
+    key = (user_id, channel_id)
+
+    # --- record timestamp ---
+    ts_queue = _message_timestamps[key]
+    ts_queue.append(now)
+
+    # --- record content ---
+    ct_queue = _message_contents[key]
+    ct_queue.append((content, now))
+
+    # Prune entries older than the longest threshold window so the deques
+    # don't grow unboundedly between cleanup cycles.
+    max_window = max(w for _, w in SPAM_THRESHOLDS)
+    while ts_queue and (now - ts_queue[0]).total_seconds() > max_window:
+        ts_queue.popleft()
+    while ct_queue and (now - ct_queue[0][1]).total_seconds() > max_window:
+        ct_queue.popleft()
+
+    # --- threshold checks ---
+    for max_msgs, window in SPAM_THRESHOLDS:
+        recent = sum(
+            1 for t in ts_queue
+            if (now - t).total_seconds() <= window
+        )
+        if recent > max_msgs:
+            return f"{recent} messages in {window}s (limit: {max_msgs})"
+
+    # --- duplicate-message check ---
+    recent_dupes = sum(
+        1 for c, t in ct_queue
+        if c == content and (now - t).total_seconds() <= DUPLICATE_WINDOW
+    )
+    # The message itself is already in the queue, so > 1 means it's a repeat.
+    if recent_dupes > 1:
+        return f"repeated identical message within {DUPLICATE_WINDOW}s"
+
+    return None
+
+
+async def _punish_spammer(
+    message: discord.Message,
+    reason: str,
+    spam_messages: list[discord.Message],
+) -> None:
+    """Timeout the spammer, delete their spam, and log to the admin channel."""
+    member = message.author
+    guild = message.guild
+
+    # Apply 10-minute timeout
+    until = discord.utils.utcnow() + timedelta(minutes=AUTOMOD_TIMEOUT_MINUTES)
+    try:
+        await member.timeout(until, reason=f"[Automod] {reason}")
+    except discord.Forbidden:
+        pass  # Bot lacks permission — log anyway
+
+    # Bulk-delete spam messages (discord allows bulk delete for messages < 14 days)
+    try:
+        await message.channel.delete_messages(spam_messages)
+    except (discord.Forbidden, discord.HTTPException):
+        # Fall back to individual deletes
+        for msg in spam_messages:
+            try:
+                await msg.delete()
+            except (discord.Forbidden, discord.NotFound):
+                pass
+
+    # Log to admin channel
+    admin_channel = bot.get_channel(ADMIN_CHANNEL_ID)
+    if admin_channel:
+        embed = discord.Embed(
+            title="🛡️ Automod — Spam Detected",
+            color=discord.Color.red(),
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.add_field(
+            name="User",
+            value=f"{member} (ID: `{member.id}`)",
+            inline=False,
+        )
+        embed.add_field(
+            name="Channel",
+            value=message.channel.mention,
+            inline=True,
+        )
+        embed.add_field(
+            name="Reason",
+            value=reason,
+            inline=True,
+        )
+        embed.add_field(
+            name="Action",
+            value=f"Timed out for {AUTOMOD_TIMEOUT_MINUTES} minutes · {len(spam_messages)} message(s) deleted",
+            inline=False,
+        )
+        embed.set_footer(text=f"Guild: {guild.name}")
+        await admin_channel.send(embed=embed)
+
+    # Record punishment time to enforce cooldown
+    _punishment_cooldowns[member.id] = discord.utils.utcnow()
+
+
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
+    cleanup_automod_state.start()
+
+@tasks.loop(minutes=5)
+async def cleanup_automod_state():
+    """Periodically evict stale entries from the automod tracking dicts."""
+    now = datetime.now(timezone.utc)
+    max_window = max(w for _, w in SPAM_THRESHOLDS)
+
+    stale_ts = [k for k, q in _message_timestamps.items() if not q or (now - q[-1]).total_seconds() > max_window]
+    for k in stale_ts:
+        del _message_timestamps[k]
+
+    stale_ct = [k for k, q in _message_contents.items() if not q or (now - q[-1][1]).total_seconds() > max_window]
+    for k in stale_ct:
+        del _message_contents[k]
+
+    stale_cd = [uid for uid, t in _punishment_cooldowns.items() if (now - t).total_seconds() > PUNISHMENT_COOLDOWN]
+    for uid in stale_cd:
+        del _punishment_cooldowns[uid]
+
 
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
+
+    # ------------------------------------------------------------------
+    # Automod — only applies to guild (server) text channels
+    # ------------------------------------------------------------------
+    if (
+        isinstance(message.channel, discord.TextChannel)
+        and isinstance(message.author, discord.Member)
+        and not _is_exempt(message.author)
+    ):
+        spam_reason = _check_spam(message.author.id, message.channel.id, message.content)
+
+        if spam_reason:
+            user_id = message.author.id
+            now = discord.utils.utcnow()
+
+            # Enforce per-user punishment cooldown
+            last_punished = _punishment_cooldowns.get(user_id)
+            on_cooldown = (
+                last_punished is not None
+                and (now - last_punished).total_seconds() < PUNISHMENT_COOLDOWN
+            )
+
+            if not on_cooldown:
+                # Collect all cached messages from this user in this channel
+                # to bulk-delete alongside the triggering message.
+                key = (user_id, message.channel.id)
+                spam_msgs = [message]
+
+                # Fetch recent channel history to find the user's spam messages
+                try:
+                    async for hist_msg in message.channel.history(limit=20):
+                        if (
+                            hist_msg.author.id == user_id
+                            and hist_msg.id != message.id
+                        ):
+                            spam_msgs.append(hist_msg)
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+
+                await _punish_spammer(message, spam_reason, spam_msgs)
+
+            # Stop processing — don't run commands or modmail for spam messages
+            return
 
     if isinstance(message.channel, discord.DMChannel):
         user_id = message.author.id
