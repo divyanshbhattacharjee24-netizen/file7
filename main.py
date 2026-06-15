@@ -352,6 +352,29 @@ async def reply(ctx, user_id: int, *, message):
     await ctx.send("✅ Reply sent.")
 
 @bot.command()
+@commands.has_permissions(administrator=True)
+async def echo(ctx, *, message):
+    try:
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.NotFound):
+        pass
+
+    try:
+        await ctx.send(message)
+    except discord.Forbidden:
+        try:
+            await ctx.author.send("❌ I don't have permissions to send in the channel")
+        except discord.Forbidden:
+            pass
+
+@echo.error
+async def echo_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ You don't have admin permissions")
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("❌ Please provide a message to echo.")
+
+@bot.command()
 @commands.has_permissions(kick_members=True)
 async def kick(ctx, member: discord.Member, *, reason="No reason provided"):
     await member.kick(reason=reason)
