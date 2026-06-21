@@ -446,6 +446,8 @@ async def apply(ctx):
     # Register the session — step 0 means we're waiting for the answer to Q1
     pending_applications[user_id] = {"step": 0, "answers": []}
 
+print("Starting Divyansh Flask API...")
+
 Thread(target=run_web, daemon=True).start()
 
 bot.run(os.getenv("DISCORD_TOKEN"))
