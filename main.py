@@ -445,20 +445,95 @@ async def apply(ctx):
 
     # Register the session — step 0 means we're waiting for the answer to Q1
     pending_applications[user_id] = {"step": 0, "answers": []}
+@bot.command()
+async def daily(ctx):
+user_id = ctx.author.id
+now = datetime.utcnow()
 
+if user_id in last_daily:
+    if now - last_daily[user_id] < timedelta(hours=24):
+        await ctx.send("Are you kidding me??? YOU JUST TOOK YOUR DAILY REWARD !")
+        return
+
+add_robux(user_id, DAILY_REWARD)
+last_daily[user_id] = now
+
+await ctx.send(
+    f"🎁 {ctx.author.mention}, you received {DAILY_REWARD:,} Robux!\n"
+    f"💰 Balance: {get_robux(user_id):,} Robux"
+)
+
+@bot.command()
+async def robux(ctx):
+balance = get_robux(ctx.author.id)
+
+await ctx.send(
+    f"{ctx.author.mention}, you currently have {balance:,} Robux."
+)
+
+@bot.command()
+async def cf(ctx, amount: int):
+user_id = ctx.author.id
+
+if amount <= 0:
+    await ctx.send("Please enter a valid amount of Robux.")
+    return
+
+if get_robux(user_id) < amount:
+    await ctx.send(
+        f"Nope, {ctx.author.name} do you think you have enough Robux?"
+    )
+    return
+
+result = random.choice(["Heads", "Tails"])
+
+if result == "Heads":
+    winnings = amount * 2
+
+    add_robux(user_id, winnings)
+
+    await ctx.send(
+        f"🪙 Heads!\n"
+        f"You won {winnings:,} Robux!\n"
+        f"💰 Balance: {get_robux(user_id):,} Robux"
+    )
+else:
+    add_robux(user_id, -amount)
+
+    await ctx.send(
+        f"🪙 Tails!\n"
+        f"You lost {amount:,} Robux!\n"
+        f"💰 Balance: {get_robux(user_id):,} Robux"
+    )
+
+@bot.command()
+async def transfer(ctx, amount: int, member: discord.Member):
+sender_id = ctx.author.id
+receiver_id = member.id
+
+if member.bot:
+    await ctx.send("You cannot transfer Robux to bots.")
+    return
+
+if amount <= 0:
+    await ctx.send("Please enter a valid amount.")
+    return
+
+if get_robux(sender_id) < amount:
+    await ctx.send(
+        f"Nope, {ctx.author.name} do you think you have enough Robux?"
+    )
+    return
+
+add_robux(sender_id, -amount)
+add_robux(receiver_id, amount)
+
+await ctx.send(
+    f"💸 {ctx.author.mention} transferred "
+    f"{amount:,} Robux to {member.mention}!"
+)
 print("Starting Divyansh Flask API...")
 
 Thread(target=run_web, daemon=True).start()
-
-import asyncio
-
-async def load_cogs():
-    try:
-        await bot.load_extension("economy")
-        print("Successfully loaded economy")
-    except Exception as e:
-        print(f"Failed to load economy: {e}")
-
-print("About to start bot...")
 
 bot.run(os.getenv("DISCORD_TOKEN"))
