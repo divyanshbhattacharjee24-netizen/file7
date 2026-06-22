@@ -459,9 +459,6 @@ async def load_cogs():
     except Exception as e:
         print(f"Failed to load economy: {e}")
 
-@bot.event
-async def setup_hook():
-    print("Running setup_hook...")
-    await load_cogs()
+print("About to start bot...")
 
 bot.run(os.getenv("DISCORD_TOKEN"))
