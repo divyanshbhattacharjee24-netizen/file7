@@ -105,4 +105,6 @@ async def transfer(self, ctx, amount: int, member: discord.Member):
     )
 
 async def setup(bot):
-await bot.add_cog(Economy(bot))
+    print("Loading Economy Cog...")
+    await bot.add_cog(Economy(bot))
+    print("Economy Cog Loaded HAHAHAHA!")
