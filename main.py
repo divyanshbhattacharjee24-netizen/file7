@@ -450,4 +450,12 @@ print("Starting Divyansh Flask API...")
 
 Thread(target=run_web, daemon=True).start()
 
+import asyncio
+
+async def load_cogs():
+    await bot.load_extension("economy")
+
+@bot.event
+async def setup_hook():
+    await load_cogs()
 bot.run(os.getenv("DISCORD_TOKEN"))
