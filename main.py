@@ -1,5 +1,6 @@
 import os
 import discord
+import random
 from discord.ext import commands, tasks
 from datetime import timedelta, datetime, timezone
 from collections import defaultdict, deque
@@ -447,9 +448,19 @@ async def apply(ctx):
     pending_applications[user_id] = {"step": 0, "answers": []}
 @bot.command()
 async def daily(ctx):
-user_id = ctx.author.id
-now = datetime.utcnow()
+    user_id = ctx.author.id
+    now = datetime.utcnow()
 
+robux = {}
+last_daily = {}
+DAILY_REWARD = 100000
+
+def get_robux(user_id):
+    return robux.get(user_id, 0)
+
+def add_robux(user_id, amount):
+    robux[user_id] = get_robux(user_id) + amount
+    
 if user_id in last_daily:
     if now - last_daily[user_id] < timedelta(hours=24):
         await ctx.send("Are you kidding me??? YOU JUST TOOK YOUR DAILY REWARD !")
