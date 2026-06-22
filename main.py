@@ -453,9 +453,15 @@ Thread(target=run_web, daemon=True).start()
 import asyncio
 
 async def load_cogs():
-    await bot.load_extension("economy")
+    try:
+        await bot.load_extension("economy")
+        print("Successfully loaded economy")
+    except Exception as e:
+        print(f"Failed to load economy: {e}")
 
 @bot.event
 async def setup_hook():
+    print("Running setup_hook...")
     await load_cogs()
+
 bot.run(os.getenv("DISCORD_TOKEN"))
