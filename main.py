@@ -398,6 +398,13 @@ async def kick(ctx, member: discord.Member, *, reason="No reason provided"):
 @bot.command()
 @commands.has_permissions(ban_members=True)
 async def ban(ctx, member: discord.Member, *, reason="No reason provided"):
+    try:
+        await member.send(
+            f"🔨 You have been banned from **{ctx.guild.name}**.\n"
+            f"**Reason:** {reason}"
+        )
+    except discord.Forbidden:
+        pass  # Member has DMs disabled or has blocked the bot
     await member.ban(reason=reason)
     await ctx.send(f"✅ Banned {member}")
 
