@@ -453,104 +453,151 @@ async def apply(ctx):
 
     # Register the session — step 0 means we're waiting for the answer to Q1
     pending_applications[user_id] = {"step": 0, "answers": []}
+
+# ---------------------------------------------------------------------------
+# Economy system
+# ---------------------------------------------------------------------------
+# In-memory stores for balances and daily-claim timestamps.
+_robux_balances: dict[int, int] = {}
+_last_daily: dict[int, datetime] = {}
+
+DAILY_REWARD = 100_000
+
+
+def get_robux(user_id: int) -> int:
+    """Return the current Robux balance for a user (defaults to 0)."""
+    return _robux_balances.get(user_id, 0)
+
+
+def add_robux(user_id: int, amount: int) -> None:
+    """Add (or subtract, if negative) Robux from a user's balance."""
+    _robux_balances[user_id] = get_robux(user_id) + amount
+
+
 @bot.command()
 async def daily(ctx):
+    """Claim a daily reward of 100,000 Robux (once every 24 hours)."""
     user_id = ctx.author.id
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
-robux = {}
-last_daily = {}
-DAILY_REWARD = 100000
+    last_claim = _last_daily.get(user_id)
+    if last_claim is not None:
+        # Make sure last_claim is timezone-aware for comparison
+        if last_claim.tzinfo is None:
+            last_claim = last_claim.replace(tzinfo=timezone.utc)
+        elapsed = now - last_claim
+        if elapsed < timedelta(hours=24):
+            remaining = timedelta(hours=24) - elapsed
+            hours, remainder = divmod(int(remaining.total_seconds()), 3600)
+            minutes = remainder // 60
+            await ctx.send(
+                f"⏳ {ctx.author.mention}, you already claimed your daily reward! "
+                f"Come back in **{hours}h {minutes}m**."
+            )
+            return
 
-def get_robux(user_id):
-    return robux.get(user_id, 0)
+    add_robux(user_id, DAILY_REWARD)
+    _last_daily[user_id] = now
 
-def add_robux(user_id, amount):
-    robux[user_id] = get_robux(user_id) + amount
-    
-if user_id in last_daily:
-    if now - last_daily[user_id] < timedelta(hours=24):
-        await ctx.send("Are you kidding me??? YOU JUST TOOK YOUR DAILY REWARD !")
-        return
+    await ctx.send(
+        f"🎁 {ctx.author.mention}, you received **{DAILY_REWARD:,} Robux**!\n"
+        f"💰 Balance: **{get_robux(user_id):,} Robux**"
+    )
 
-add_robux(user_id, DAILY_REWARD)
-last_daily[user_id] = now
-
-await ctx.send(
-    f"🎁 {ctx.author.mention}, you received {DAILY_REWARD:,} Robux!\n"
-    f"💰 Balance: {get_robux(user_id):,} Robux"
-)
 
 @bot.command()
 async def robux(ctx):
-balance = get_robux(ctx.author.id)
+    """Check your current Robux balance."""
+    balance = get_robux(ctx.author.id)
+    await ctx.send(
+        f"💰 {ctx.author.mention}, you currently have **{balance:,} Robux**."
+    )
 
-await ctx.send(
-    f"{ctx.author.mention}, you currently have {balance:,} Robux."
-)
 
 @bot.command()
 async def cf(ctx, amount: int):
-user_id = ctx.author.id
+    """Flip a coin and gamble Robux. Usage: !cf <amount>"""
+    user_id = ctx.author.id
 
-if amount <= 0:
-    await ctx.send("Please enter a valid amount of Robux.")
-    return
+    if amount <= 0:
+        await ctx.send("❌ Please enter a valid amount of Robux greater than 0.")
+        return
 
-if get_robux(user_id) < amount:
-    await ctx.send(
-        f"Nope, {ctx.author.name} do you think you have enough Robux?"
-    )
-    return
+    if get_robux(user_id) < amount:
+        await ctx.send(
+            f"❌ {ctx.author.mention}, you don't have enough Robux! "
+            f"Your balance is **{get_robux(user_id):,} Robux**."
+        )
+        return
 
-result = random.choice(["Heads", "Tails"])
+    result = random.choice(["Heads", "Tails"])
 
-if result == "Heads":
-    winnings = amount * 2
+    if result == "Heads":
+        winnings = amount
+        add_robux(user_id, winnings)
+        await ctx.send(
+            f"🪙 **Heads!** You won **{winnings:,} Robux**!\n"
+            f"💰 Balance: **{get_robux(user_id):,} Robux**"
+        )
+    else:
+        add_robux(user_id, -amount)
+        await ctx.send(
+            f"🪙 **Tails!** You lost **{amount:,} Robux**!\n"
+            f"💰 Balance: **{get_robux(user_id):,} Robux**"
+        )
 
-    add_robux(user_id, winnings)
 
-    await ctx.send(
-        f"🪙 Heads!\n"
-        f"You won {winnings:,} Robux!\n"
-        f"💰 Balance: {get_robux(user_id):,} Robux"
-    )
-else:
-    add_robux(user_id, -amount)
+@cf.error
+async def cf_error(ctx, error):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("❌ Usage: `!cf <amount>`")
+    elif isinstance(error, commands.BadArgument):
+        await ctx.send("❌ Please provide a whole number as the amount.")
 
-    await ctx.send(
-        f"🪙 Tails!\n"
-        f"You lost {amount:,} Robux!\n"
-        f"💰 Balance: {get_robux(user_id):,} Robux"
-    )
 
 @bot.command()
-async def transfer(ctx, amount: int, member: discord.Member):
-sender_id = ctx.author.id
-receiver_id = member.id
+async def transfer(ctx, member: discord.Member, amount: int):
+    """Transfer Robux to another member. Usage: !transfer <@member> <amount>"""
+    sender_id = ctx.author.id
+    receiver_id = member.id
 
-if member.bot:
-    await ctx.send("You cannot transfer Robux to bots.")
-    return
+    if member.bot:
+        await ctx.send("❌ You cannot transfer Robux to bots.")
+        return
 
-if amount <= 0:
-    await ctx.send("Please enter a valid amount.")
-    return
+    if member.id == sender_id:
+        await ctx.send("❌ You cannot transfer Robux to yourself.")
+        return
 
-if get_robux(sender_id) < amount:
+    if amount <= 0:
+        await ctx.send("❌ Please enter a valid amount greater than 0.")
+        return
+
+    if get_robux(sender_id) < amount:
+        await ctx.send(
+            f"❌ {ctx.author.mention}, you don't have enough Robux! "
+            f"Your balance is **{get_robux(sender_id):,} Robux**."
+        )
+        return
+
+    add_robux(sender_id, -amount)
+    add_robux(receiver_id, amount)
+
     await ctx.send(
-        f"Nope, {ctx.author.name} do you think you have enough Robux?"
+        f"💸 {ctx.author.mention} transferred **{amount:,} Robux** to {member.mention}!\n"
+        f"💰 Your new balance: **{get_robux(sender_id):,} Robux**"
     )
-    return
 
-add_robux(sender_id, -amount)
-add_robux(receiver_id, amount)
 
-await ctx.send(
-    f"💸 {ctx.author.mention} transferred "
-    f"{amount:,} Robux to {member.mention}!"
-)
-print("Starting Divyansh Flask API...")
+@transfer.error
+async def transfer_error(ctx, error):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("❌ Usage: `!transfer <@member> <amount>`")
+    elif isinstance(error, commands.BadArgument):
+        await ctx.send("❌ Please mention a valid member and provide a whole number amount.")
+
+
+print("Starting Flask API...")
 
 Thread(target=run_web, daemon=True).start()
 
