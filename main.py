@@ -55,7 +55,7 @@ app = Flask(__name__)
 @app.route("/stats")
 def stats():
     return jsonify({
-        "servers": len(bot.guilds)
+        "servers": 123
     })
 
 def run_web():
