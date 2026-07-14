@@ -399,13 +399,18 @@ async def kick(ctx, member: discord.Member, *, reason="No reason provided"):
 @bot.command()
 @commands.has_permissions(ban_members=True)
 async def ban(ctx, member: discord.Member, *, reason="No reason provided"):
+    dm_message = (
+        f"You're banned from Roblox Fans Server! "
+        f"Reason: {reason} "
+        f"Join this server to appeal your ban! https://discord.gg/jyuC9nuFST"
+    )
+
     try:
-        await member.send(
-            f"🔨 You have been banned from **{ctx.guild.name}**.\n"
-            f"**Reason:** {reason}"
-        )
+        await member.send(dm_message)
     except discord.Forbidden:
-        pass  # Member has DMs disabled or has blocked the bot
+        # Member has DMs disabled or has blocked the bot — log it and continue.
+        print(f"⚠️ Could not DM {member} before banning (DMs disabled/blocked).")
+
     await member.ban(reason=reason)
     await ctx.send(f"✅ Banned {member}")
 
