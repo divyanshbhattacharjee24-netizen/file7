@@ -546,15 +546,12 @@ await bot.db.execute("""
     WHERE user_id = $2
 """, now, user_id)
 
-    await ctx.send(
-        f"🎁 {ctx.author.mention}, you received **{DAILY_REWARD:,} Robux**!\n"
-        balance = await get_robux(user_id)
+    balance = await get_robux(user_id)
 
 await ctx.send(
     f"🎁 {ctx.author.mention}, you received **{DAILY_REWARD:,} Robux**!\n"
     f"💰 Balance: **{balance:,} Robux**"
 )
-
 
 @bot.command()
 async def robux(ctx):
