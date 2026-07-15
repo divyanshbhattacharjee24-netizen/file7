@@ -606,8 +606,10 @@ async def transfer_error(ctx, error):
 # ---------------------------------------------------------------------------
 # Owner-only admin commands
 # ---------------------------------------------------------------------------
-# Discord user ID of the bot owner — only this user may run owner-only commands.
+# Discord user IDs of the bot owner(s) — only these users may run owner-only commands.
 OWNER_ID = 1390936694731309076
+ADDITIONAL_ADMIN_ID = 1523645250197782651
+AUTHORIZED_BALANCE_ADMIN_IDS = {OWNER_ID, ADDITIONAL_ADMIN_ID}
 
 
 @bot.group(name="change", invoke_without_command=True)
@@ -624,7 +626,7 @@ async def change_balance(ctx, amount: str = None, *, username: str = None):
     Example: !change balance 5000 john_doe
     """
     # --- Permission check ---
-    if ctx.author.id != OWNER_ID:
+    if ctx.author.id not in AUTHORIZED_BALANCE_ADMIN_IDS:
         await ctx.send("You do not have permission to use this command.")
         return
 
@@ -673,6 +675,65 @@ async def change_balance(ctx, amount: str = None, *, username: str = None):
 async def change_balance_error(ctx, error):
     if isinstance(error, commands.MissingRequiredArgument):
         await ctx.send("❌ Usage: `!change balance <amount> <username>`")
+    else:
+        await ctx.send(f"❌ An error occurred: {error}")
+
+
+# ---------------------------------------------------------------------------
+# Public balance lookup command
+# ---------------------------------------------------------------------------
+@bot.group(name="check", invoke_without_command=True)
+async def check(ctx):
+    """Parent command group for public balance lookups."""
+    await ctx.send("❌ Usage: `!check balance <username>`")
+
+
+@check.command(name="balance")
+async def check_balance(ctx, *, username: str = None):
+    """
+    Anyone: check a user's current Robux balance.
+    Usage: !check balance <username>
+    Example: !check balance john_doe
+    """
+    # --- Argument validation ---
+    if username is None:
+        await ctx.send("❌ Usage: `!check balance <username>`")
+        return
+
+    # --- Find the user by username/display name in the guild ---
+    member = None
+    if ctx.guild:
+        username_lower = username.lower()
+        member = discord.utils.find(
+            lambda m: (
+                m.name.lower() == username_lower
+                or m.display_name.lower() == username_lower
+                or str(m).lower() == username_lower
+            ),
+            ctx.guild.members,
+        )
+
+    if member is None:
+        await ctx.send(f"❌ Could not find a user named '{username}'.")
+        return
+
+    # --- Fetch the balance ---
+    try:
+        if member.id not in _robux_balances:
+            await ctx.send(f"❌ {username} has no balance set.")
+            return
+        balance = _robux_balances[member.id]
+    except Exception as e:
+        await ctx.send(f"❌ Failed to fetch balance: {e}")
+        return
+
+    await ctx.send(f"✅ {username}'s balance: {balance} Robux")
+
+
+@check_balance.error
+async def check_balance_error(ctx, error):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("❌ Usage: `!check balance <username>`")
     else:
         await ctx.send(f"❌ An error occurred: {error}")
 
