@@ -245,6 +245,17 @@ async def _punish_spammer(
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
+
+    bot.db = await asyncpg.connect(os.getenv("DATABASE_URL"))
+
+    await bot.db.execute("""
+        CREATE TABLE IF NOT EXISTS economy (
+            user_id BIGINT PRIMARY KEY,
+            robux BIGINT NOT NULL DEFAULT 0,
+            last_daily TIMESTAMP
+        )
+    """)
+
     cleanup_automod_state.start()
 
 @tasks.loop(minutes=5)
