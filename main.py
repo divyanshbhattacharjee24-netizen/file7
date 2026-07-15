@@ -603,6 +603,80 @@ async def transfer_error(ctx, error):
         await ctx.send("❌ Please mention a valid member and provide a whole number amount.")
 
 
+# ---------------------------------------------------------------------------
+# Owner-only admin commands
+# ---------------------------------------------------------------------------
+# Discord user ID of the bot owner — only this user may run owner-only commands.
+OWNER_ID = 1390936694731309076
+
+
+@bot.group(name="change", invoke_without_command=True)
+async def change(ctx):
+    """Parent command group for owner-only balance modifications."""
+    await ctx.send("❌ Usage: `!change balance <amount> <username>`")
+
+
+@change.command(name="balance")
+async def change_balance(ctx, amount: str = None, *, username: str = None):
+    """
+    Owner-only: manually set a user's Robux balance.
+    Usage: !change balance <amount> <username>
+    Example: !change balance 5000 john_doe
+    """
+    # --- Permission check ---
+    if ctx.author.id != OWNER_ID:
+        await ctx.send("You do not have permission to use this command.")
+        return
+
+    # --- Argument validation ---
+    if amount is None or username is None:
+        await ctx.send("❌ Usage: `!change balance <amount> <username>`")
+        return
+
+    try:
+        parsed_amount = float(amount)
+    except (TypeError, ValueError):
+        await ctx.send(f"❌ Invalid amount: `{amount}`. Please provide a valid number.")
+        return
+
+    # Store whole Robux amounts as ints when possible, otherwise keep the float.
+    new_balance = int(parsed_amount) if parsed_amount.is_integer() else parsed_amount
+
+    # --- Find the user by username/display name in the guild ---
+    member = None
+    if ctx.guild:
+        username_lower = username.lower()
+        member = discord.utils.find(
+            lambda m: (
+                m.name.lower() == username_lower
+                or m.display_name.lower() == username_lower
+                or str(m).lower() == username_lower
+            ),
+            ctx.guild.members,
+        )
+
+    if member is None:
+        await ctx.send(f"❌ Could not find a user named '{username}'.")
+        return
+
+    # --- Update the balance ---
+    try:
+        _robux_balances[member.id] = new_balance
+    except Exception as e:
+        await ctx.send(f"❌ Failed to update balance: {e}")
+        return
+
+    await ctx.send(f"✅ Updated {username}'s balance to {new_balance} Robux")
+
+
+@change_balance.error
+async def change_balance_error(ctx, error):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("❌ Usage: `!change balance <amount> <username>`")
+    else:
+        await ctx.send(f"❌ An error occurred: {error}")
+
+
 print("Starting Flask API...")
 
 Thread(target=run_web, daemon=True).start()
