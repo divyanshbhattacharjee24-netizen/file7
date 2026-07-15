@@ -554,7 +554,6 @@ await ctx.send(
     f"🎁 {ctx.author.mention}, you received **{DAILY_REWARD:,} Robux**!\n"
     f"💰 Balance: **{balance:,} Robux**"
 )
-    )
 
 
 @bot.command()
