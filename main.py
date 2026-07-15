@@ -538,8 +538,9 @@ if row and row["last_daily"] is not None:
             f"Come back in **{hours}h {minutes}m**."
         )
         return
-   await add_robux(user_id, DAILY_REWARD)
-    await bot.db.execute("""
+    await add_robux(user_id, DAILY_REWARD)
+
+await bot.db.execute("""
     UPDATE economy
     SET last_daily = $1
     WHERE user_id = $2
