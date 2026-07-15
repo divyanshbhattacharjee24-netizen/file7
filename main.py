@@ -482,14 +482,31 @@ _last_daily: dict[int, datetime] = {}
 DAILY_REWARD = 100_000
 
 
-def get_robux(user_id: int) -> int:
-    """Return the current Robux balance for a user (defaults to 0)."""
-    return _robux_balances.get(user_id, 0)
+async def get_robux(user_id: int) -> int:
+    row = await bot.db.fetchrow(
+        "SELECT robux FROM economy WHERE user_id = $1",
+        user_id
+    )
+
+    if row is None:
+        await bot.db.execute(
+            "INSERT INTO economy (user_id, robux) VALUES ($1, 0)",
+            user_id
+        )
+        return 0
+
+    return row["robux"]
 
 
-def add_robux(user_id: int, amount: int) -> None:
-    """Add (or subtract, if negative) Robux from a user's balance."""
-    _robux_balances[user_id] = get_robux(user_id) + amount
+async def add_robux(user_id: int, amount: int) -> None:
+    balance = await get_robux(user_id)
+
+    await bot.db.execute("""
+        INSERT INTO economy (user_id, robux)
+        VALUES ($1, $2)
+        ON CONFLICT (user_id)
+        DO UPDATE SET robux = $2
+    """, user_id, balance + amount)
 
 
 @bot.command()
@@ -498,35 +515,51 @@ async def daily(ctx):
     user_id = ctx.author.id
     now = datetime.now(timezone.utc)
 
-    last_claim = _last_daily.get(user_id)
-    if last_claim is not None:
-        # Make sure last_claim is timezone-aware for comparison
-        if last_claim.tzinfo is None:
-            last_claim = last_claim.replace(tzinfo=timezone.utc)
-        elapsed = now - last_claim
-        if elapsed < timedelta(hours=24):
-            remaining = timedelta(hours=24) - elapsed
-            hours, remainder = divmod(int(remaining.total_seconds()), 3600)
-            minutes = remainder // 60
-            await ctx.send(
-                f"⏳ {ctx.author.mention}, you already claimed your daily reward! "
-                f"Come back in **{hours}h {minutes}m**."
-            )
-            return
+    row = await bot.db.fetchrow(
+    "SELECT last_daily FROM economy WHERE user_id = $1",
+    user_id
+)
 
-    add_robux(user_id, DAILY_REWARD)
-    _last_daily[user_id] = now
+if row and row["last_daily"] is not None:
+    last_claim = row["last_daily"]
+
+    if last_claim.tzinfo is None:
+        last_claim = last_claim.replace(tzinfo=timezone.utc)
+
+    elapsed = now - last_claim
+
+    if elapsed < timedelta(hours=24):
+        remaining = timedelta(hours=24) - elapsed
+        hours, remainder = divmod(int(remaining.total_seconds()), 3600)
+        minutes = remainder // 60
+
+        await ctx.send(
+            f"⏳ {ctx.author.mention}, you already claimed your daily reward! "
+            f"Come back in **{hours}h {minutes}m**."
+        )
+        return
+   await add_robux(user_id, DAILY_REWARD)
+    await bot.db.execute("""
+    UPDATE economy
+    SET last_daily = $1
+    WHERE user_id = $2
+""", now, user_id)
 
     await ctx.send(
         f"🎁 {ctx.author.mention}, you received **{DAILY_REWARD:,} Robux**!\n"
-        f"💰 Balance: **{get_robux(user_id):,} Robux**"
+        balance = await get_robux(user_id)
+
+await ctx.send(
+    f"🎁 {ctx.author.mention}, you received **{DAILY_REWARD:,} Robux**!\n"
+    f"💰 Balance: **{balance:,} Robux**"
+)
     )
 
 
 @bot.command()
 async def robux(ctx):
     """Check your current Robux balance."""
-    balance = get_robux(ctx.author.id)
+    balance = await get_robux(ctx.author.id)
     await ctx.send(
         f"💰 {ctx.author.mention}, you currently have **{balance:,} Robux**."
     )
@@ -541,28 +574,37 @@ async def cf(ctx, amount: int):
         await ctx.send("❌ Please enter a valid amount of Robux greater than 0.")
         return
 
-    if get_robux(user_id) < amount:
-        await ctx.send(
-            f"❌ {ctx.author.mention}, you don't have enough Robux! "
-            f"Your balance is **{get_robux(user_id):,} Robux**."
-        )
-        return
+    balance = await get_robux(user_id)
+
+if balance < amount:
+    await ctx.send(
+        f"❌ {ctx.author.mention}, you don't have enough Robux! "
+        f"Your balance is **{balance:,} Robux**."
+    )
+    return
 
     result = random.choice(["Heads", "Tails"])
 
     if result == "Heads":
-        winnings = amount
-        add_robux(user_id, winnings)
-        await ctx.send(
-            f"🪙 **Heads!** You won **{winnings:,} Robux**!\n"
-            f"💰 Balance: **{get_robux(user_id):,} Robux**"
-        )
-    else:
-        add_robux(user_id, -amount)
-        await ctx.send(
-            f"🪙 **Tails!** You lost **{amount:,} Robux**!\n"
-            f"💰 Balance: **{get_robux(user_id):,} Robux**"
-        )
+    winnings = amount
+    await add_robux(user_id, winnings)
+
+    balance = await get_robux(user_id)
+
+    await ctx.send(
+        f"🪙 **Heads!** You won **{winnings:,} Robux**!\n"
+        f"💰 Balance: **{balance:,} Robux**"
+    )
+
+else:
+    await add_robux(user_id, -amount)
+
+    balance = await get_robux(user_id)
+
+    await ctx.send(
+        f"🪙 **Tails!** You lost **{amount:,} Robux**!\n"
+        f"💰 Balance: **{balance:,} Robux**"
+    )
 
 
 @cf.error
@@ -591,19 +633,21 @@ async def transfer(ctx, member: discord.Member, amount: int):
         await ctx.send("❌ Please enter a valid amount greater than 0.")
         return
 
-    if get_robux(sender_id) < amount:
-        await ctx.send(
-            f"❌ {ctx.author.mention}, you don't have enough Robux! "
-            f"Your balance is **{get_robux(sender_id):,} Robux**."
-        )
-        return
+    sender_balance = await get_robux(sender_id)
 
-    add_robux(sender_id, -amount)
-    add_robux(receiver_id, amount)
+if sender_balance < amount:
+    await ctx.send(
+        f"❌ {ctx.author.mention}, you don't have enough Robux! "
+        f"Your balance is **{sender_balance:,} Robux**."
+    )
+    return
+   await add_robux(sender_id, -amount)
+  await add_robux(receiver_id, amount)
 
     await ctx.send(
         f"💸 {ctx.author.mention} transferred **{amount:,} Robux** to {member.mention}!\n"
-        f"💰 Your new balance: **{get_robux(sender_id):,} Robux**"
+        new_balance = await get_robux(sender_id)
+        f"💰 Your new balance: **{(await get_robux(sender_id)):,} Robux**"
     )
 
 
@@ -754,31 +798,44 @@ async def check_balance_error(ctx, error):
 @bot.command(name="leaderboard", aliases=["lb"])
 async def leaderboard(ctx):
     """Global fake Robux leaderboard."""
-    if not _robux_balances:
+
+    rows = await bot.db.fetch("""
+        SELECT user_id, robux
+        FROM economy
+        ORDER BY robux DESC
+    """)
+
+    if not rows:
         await ctx.send("🏆 No users have any Robux yet.")
         return
 
-    sorted_users = sorted(_robux_balances.items(), key=lambda x: x[1], reverse=True)
+    lines = []
 
-    lines=[]
-    for i,(uid,balance) in enumerate(sorted_users, start=1):
-        user = bot.get_user(uid)
-        if user is None:
-            try:
-                user = await bot.fetch_user(uid)
-            except Exception:
-                name=f"Unknown User ({uid})"
-            else:
-                name=user.name
+    for i, row in enumerate(rows, start=1):
+        uid = row["user_id"]
+        balance = row["robux"]
+
+        try:
+            user = await bot.fetch_user(uid)
+            name = user.name
+        except Exception:
+            name = f"Unknown User ({uid})"
+
+        if i == 1:
+            suffix = "st"
+        elif i == 2:
+            suffix = "nd"
+        elif i == 3:
+            suffix = "rd"
         else:
-            name=user.name
-        suffix = "th"
-        if i==1: suffix="st"
-        elif i==2: suffix="nd"
-        elif i==3: suffix="rd"
+            suffix = "th"
+
         lines.append(f"{i}{suffix} {name} - {balance:,} Robux")
 
-    await ctx.send("🏆 **Global Fake Robux Leaderboard**\n\n" + "\n".join(lines))
+    await ctx.send(
+        "🏆 **Global Fake Robux Leaderboard**\n\n" +
+        "\n".join(lines)
+    )
 
 print("Starting Flask API...")
 
