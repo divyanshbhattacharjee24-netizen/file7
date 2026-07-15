@@ -2,6 +2,7 @@ print("========== DIVYANSH TEST ==========")
 import os
 import discord
 import random
+import asyncpg
 from discord.ext import commands, tasks
 from datetime import timedelta, datetime, timezone
 from collections import defaultdict, deque
