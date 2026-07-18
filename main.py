@@ -784,7 +784,7 @@ async def leaderboard(ctx):
         SELECT user_id, robux
         FROM economy
         ORDER BY robux DESC
-    """)
+        """)
 
     if not rows:
         await ctx.send("🏆 No users have any Robux yet.")
