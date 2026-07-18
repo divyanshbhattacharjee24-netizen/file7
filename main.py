@@ -660,7 +660,6 @@ async def change(ctx):
 @change.command(name="balance")
 async def change_balance(ctx, amount: str = None, *, username: str = None):
     """
-    Owner-only: manually set a user's Robux balance.
     Usage: !change balance <amount> <username>
     Example: !change balance 5000 john_doe
     """
