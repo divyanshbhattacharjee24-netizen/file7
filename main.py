@@ -732,7 +732,6 @@ async def check(ctx):
 @check.command(name="balance")
 async def check_balance(ctx, *, username: str = None):
     """
-    Anyone: check a user's current Robux balance.
     Usage: !check balance <username>
     Example: !check balance john_doe
     """
