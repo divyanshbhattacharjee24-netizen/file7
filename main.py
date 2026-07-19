@@ -841,7 +841,7 @@ async def leaderboard(ctx):
         lines.append(f"{i}{suffix} {name} - {balance:,} Robux")
 
     await ctx.send(
-        "🏆 **Global Fake Robux Leaderboard**\n\n" +
+        "🏆 **Global Robux Leaderboard**\n\n" +
         "\n".join(lines)
     )
 
