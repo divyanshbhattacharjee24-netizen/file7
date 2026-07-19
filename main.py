@@ -246,15 +246,23 @@ async def _punish_spammer(
 async def on_ready():
     print(f"Logged in as {bot.user}")
 
-    bot.db = await asyncpg.connect(os.getenv("DATABASE_URL"))
+    # Attempt database connection with error handling
+    try:
+        bot.db = await asyncpg.connect(os.getenv("DATABASE_URL"))
+        print("✅ Connected to PostgreSQL")
 
-    await bot.db.execute("""
-        CREATE TABLE IF NOT EXISTS economy (
-            user_id BIGINT PRIMARY KEY,
-            robux BIGINT NOT NULL DEFAULT 0,
-            last_daily TIMESTAMP
-        )
-    """)
+        await bot.db.execute("""
+            CREATE TABLE IF NOT EXISTS economy (
+                user_id BIGINT PRIMARY KEY,
+                robux BIGINT NOT NULL DEFAULT 0,
+                last_daily TIMESTAMP
+            )
+        """)
+        print("✅ Economy table ready")
+    except Exception as e:
+        print(f"❌ Failed to connect to database: {e}")
+        print("⚠️ Bot is running but economy commands will not work until database is available")
+        bot.db = None
 
     cleanup_automod_state.start()
 
@@ -479,6 +487,9 @@ DAILY_REWARD = 100_000
 
 
 async def get_robux(user_id: int) -> int:
+    if bot.db is None:
+        raise RuntimeError("Database is not connected. Try again later.")
+
     row = await bot.db.fetchrow(
         "SELECT robux FROM economy WHERE user_id = $1",
         user_id
@@ -495,6 +506,9 @@ async def get_robux(user_id: int) -> int:
 
 
 async def add_robux(user_id: int, amount: int) -> None:
+    if bot.db is None:
+        raise RuntimeError("Database is not connected. Try again later.")
+
     balance = await get_robux(user_id)
 
     await bot.db.execute("""
@@ -640,6 +654,19 @@ async def transfer_error(ctx, error):
         await ctx.send("❌ Usage: `!transfer <@member> <amount>`")
     elif isinstance(error, commands.BadArgument):
         await ctx.send("❌ Please mention a valid member and provide a whole number amount.")
+
+
+@bot.event
+async def on_command_error(ctx, error):
+    """Catch database connection errors and other command errors."""
+    if isinstance(error, commands.CommandInvokeError):
+        # Check if it's a database error
+        if "Database is not connected" in str(error.original):
+            await ctx.send("❌ Database is temporarily unavailable. Try again in a moment.")
+        elif "bot.db" in str(error.original) or "AttributeError" in str(error.original):
+            await ctx.send("❌ Database connection failed. Try again in a moment.")
+        else:
+            await ctx.send(f"❌ An error occurred: {error.original}")
 
 
 # ---------------------------------------------------------------------------
