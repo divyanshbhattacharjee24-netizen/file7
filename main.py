@@ -805,7 +805,7 @@ async def check_balance_error(ctx, error):
 
 @bot.command(name="leaderboard", aliases=["lb"])
 async def leaderboard(ctx):
-    """Global fake Robux leaderboard."""
+    """Global Robux leaderboard."""
 
     rows = await bot.db.fetch("""
         SELECT user_id, robux
