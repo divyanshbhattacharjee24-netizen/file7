@@ -259,6 +259,14 @@ async def on_ready():
             )
         """)
         print("✅ Economy table ready")
+
+        await bot.db.execute("""
+            CREATE TABLE IF NOT EXISTS treasury (
+                id INT PRIMARY KEY DEFAULT 1,
+                total_robux BIGINT NOT NULL DEFAULT 0
+            )
+        """)
+        print("✅ Treasury table ready")
     except Exception as e:
         print(f"❌ Failed to connect to database: {e}")
         print("⚠️ Bot is running but economy commands will not work until database is available")
@@ -525,6 +533,9 @@ async def daily(ctx):
     user_id = ctx.author.id
     now = datetime.now(timezone.utc)
 
+    # Ensure user exists in database
+    await get_robux(user_id)
+
     row = await bot.db.fetchrow(
         "SELECT last_daily FROM economy WHERE user_id = $1",
         user_id
@@ -656,6 +667,204 @@ async def transfer_error(ctx, error):
         await ctx.send("❌ Please mention a valid member and provide a whole number amount.")
 
 
+# ---------------------------------------------------------------------------
+# Game commands - users play and bot takes a fee
+# ---------------------------------------------------------------------------
+GAME_ENTRY_FEE = 500  # Fee to play games, goes to treasury
+
+
+async def add_to_treasury(amount: int) -> None:
+    """Add robux to the bot's treasury."""
+    if bot.db is None:
+        return
+    await bot.db.execute(
+        "UPDATE treasury SET total_robux = total_robux + $1 WHERE id = 1",
+        amount
+    )
+
+
+async def get_treasury() -> int:
+    """Get total robux in bot treasury."""
+    if bot.db is None:
+        return 0
+    row = await bot.db.fetchrow("SELECT total_robux FROM treasury WHERE id = 1")
+    return row["total_robux"] if row else 0
+
+
+@bot.command()
+async def dice(ctx, bet: int):
+    """Roll a dice! Win up to 3x your bet. Entry fee: 500 Robux. Usage: !dice <bet>"""
+    user_id = ctx.author.id
+
+    if bet <= 0:
+        await ctx.send("❌ Bet must be greater than 0.")
+        return
+
+    balance = await get_robux(user_id)
+    total_cost = bet + GAME_ENTRY_FEE
+
+    if balance < total_cost:
+        await ctx.send(
+            f"❌ You need **{total_cost:,} Robux** (bet + {GAME_ENTRY_FEE:,} fee)! "
+            f"You have **{balance:,} Robux**."
+        )
+        return
+
+    # Charge entry fee to treasury
+    await add_robux(user_id, -GAME_ENTRY_FEE)
+    await add_to_treasury(GAME_ENTRY_FEE)
+
+    # Roll dice (1-6)
+    roll = random.randint(1, 6)
+
+    if roll >= 4:  # Win on 4, 5, or 6
+        winnings = int(bet * 2.5)
+        await add_robux(user_id, bet + winnings)
+        balance = await get_robux(user_id)
+        await ctx.send(
+            f"🎲 **{roll}!** You won! **+{winnings:,} Robux** profit!\n"
+            f"💰 New balance: **{balance:,} Robux**"
+        )
+    elif roll >= 2:  # Break even on 2 or 3
+        await add_robux(user_id, bet)
+        balance = await get_robux(user_id)
+        await ctx.send(
+            f"🎲 **{roll}!** You broke even!\n"
+            f"💰 Balance: **{balance:,} Robux**"
+        )
+    else:  # Lose on 1
+        balance = await get_robux(user_id)
+        await ctx.send(
+            f"🎲 **{roll}!** You lost your bet!\n"
+            f"💰 Balance: **{balance:,} Robux**"
+        )
+
+
+@bot.command()
+async def rps(ctx, choice: str, bet: int):
+    """Rock Paper Scissors! Win 2x your bet. Entry fee: 500 Robux. Usage: !rps <rock|paper|scissors> <bet>"""
+    user_id = ctx.author.id
+    choice = choice.lower()
+
+    if choice not in ["rock", "paper", "scissors"]:
+        await ctx.send("❌ Choose: rock, paper, or scissors")
+        return
+
+    if bet <= 0:
+        await ctx.send("❌ Bet must be greater than 0.")
+        return
+
+    balance = await get_robux(user_id)
+    total_cost = bet + GAME_ENTRY_FEE
+
+    if balance < total_cost:
+        await ctx.send(
+            f"❌ You need **{total_cost:,} Robux** (bet + {GAME_ENTRY_FEE:,} fee)! "
+            f"You have **{balance:,} Robux**."
+        )
+        return
+
+    # Charge entry fee to treasury
+    await add_robux(user_id, -GAME_ENTRY_FEE)
+    await add_to_treasury(GAME_ENTRY_FEE)
+
+    # Bot's choice
+    bot_choice = random.choice(["rock", "paper", "scissors"])
+
+    # Determine winner
+    if choice == bot_choice:
+        await add_robux(user_id, bet)
+        balance = await get_robux(user_id)
+        await ctx.send(
+            f"🎮 You: **{choice.upper()}** | Bot: **{bot_choice.upper()}**\n"
+            f"It's a tie! You get your bet back.\n"
+            f"💰 Balance: **{balance:,} Robux**"
+        )
+    elif (choice == "rock" and bot_choice == "scissors") or \
+         (choice == "paper" and bot_choice == "rock") or \
+         (choice == "scissors" and bot_choice == "paper"):
+        winnings = bet * 2
+        await add_robux(user_id, winnings)
+        balance = await get_robux(user_id)
+        await ctx.send(
+            f"🎮 You: **{choice.upper()}** | Bot: **{bot_choice.upper()}**\n"
+            f"You won! **+{winnings:,} Robux**!\n"
+            f"💰 Balance: **{balance:,} Robux**"
+        )
+    else:
+        balance = await get_robux(user_id)
+        await ctx.send(
+            f"🎮 You: **{choice.upper()}** | Bot: **{bot_choice.upper()}**\n"
+            f"You lost!\n"
+            f"💰 Balance: **{balance:,} Robux**"
+        )
+
+
+@bot.command()
+async def slots(ctx, bet: int):
+    """Spin the slots! Win up to 5x! Entry fee: 500 Robux. Usage: !slots <bet>"""
+    user_id = ctx.author.id
+
+    if bet <= 0:
+        await ctx.send("❌ Bet must be greater than 0.")
+        return
+
+    balance = await get_robux(user_id)
+    total_cost = bet + GAME_ENTRY_FEE
+
+    if balance < total_cost:
+        await ctx.send(
+            f"❌ You need **{total_cost:,} Robux** (bet + {GAME_ENTRY_FEE:,} fee)! "
+            f"You have **{balance:,} Robux**."
+        )
+        return
+
+    # Charge entry fee to treasury
+    await add_robux(user_id, -GAME_ENTRY_FEE)
+    await add_to_treasury(GAME_ENTRY_FEE)
+
+    # Spin slots
+    symbols = ["🍎", "🍊", "🍋", "🎰", "💎"]
+    result = [random.choice(symbols) for _ in range(3)]
+
+    matches = len(set(result)) == 1  # All three same?
+
+    if matches:
+        winnings = bet * 5
+        await add_robux(user_id, bet + winnings)
+        balance = await get_robux(user_id)
+        await ctx.send(
+            f"🎰 **{result[0]} {result[1]} {result[2]}** JACKPOT!\n"
+            f"You won **{winnings:,} Robux**!\n"
+            f"💰 Balance: **{balance:,} Robux**"
+        )
+    elif result[0] == result[1] or result[1] == result[2]:  # Two match
+        winnings = bet * 2
+        await add_robux(user_id, bet + winnings)
+        balance = await get_robux(user_id)
+        await ctx.send(
+            f"🎰 **{result[0]} {result[1]} {result[2]}** Two match!\n"
+            f"You won **{winnings:,} Robux**!\n"
+            f"💰 Balance: **{balance:,} Robux**"
+        )
+    else:
+        balance = await get_robux(user_id)
+        await ctx.send(
+            f"🎰 **{result[0]} {result[1]} {result[2]}** Better luck next time!\n"
+            f"💰 Balance: **{balance:,} Robux**"
+        )
+
+
+@dice.error
+@rps.error
+@slots.error
+async def game_error(ctx, error):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("❌ Missing required argument. Check the command usage.")
+    elif isinstance(error, commands.BadArgument):
+        await ctx.send("❌ Invalid argument. Make sure your bet is a number.")
+
+
 @bot.event
 async def on_command_error(ctx, error):
     """Catch database connection errors and other command errors."""
@@ -676,6 +885,34 @@ async def on_command_error(ctx, error):
 OWNER_ID = 1390936694731309076
 ADDITIONAL_ADMIN_ID = 1523645250197782651
 AUTHORIZED_BALANCE_ADMIN_IDS = {OWNER_ID, ADDITIONAL_ADMIN_ID}
+
+
+@bot.command()
+async def checkout(ctx):
+    """Owner only: Claim all robux from the bot's treasury."""
+    if ctx.author.id != OWNER_ID:
+        await ctx.send("You do not have permission to use this command.")
+        return
+
+    treasury = await get_treasury()
+
+    if treasury <= 0:
+        await ctx.send("💰 Treasury is empty!")
+        return
+
+    # Add to owner's balance
+    await add_robux(OWNER_ID, treasury)
+
+    # Reset treasury
+    await bot.db.execute("UPDATE treasury SET total_robux = 0 WHERE id = 1")
+
+    new_balance = await get_robux(OWNER_ID)
+
+    await ctx.send(
+        f"💸 **Checkout successful!**\n"
+        f"💰 Claimed **{treasury:,} Robux** from treasury\n"
+        f"🏦 Your new balance: **{new_balance:,} Robux**"
+    )
 
 
 @bot.group(name="change", invoke_without_command=True)
