@@ -267,6 +267,13 @@ async def on_ready():
             )
         """)
         print("✅ Treasury table ready")
+
+        # Initialize treasury if it doesn't exist
+        await bot.db.execute("""
+            INSERT INTO treasury (id, total_robux) 
+            VALUES (1, 0) 
+            ON CONFLICT (id) DO NOTHING
+        """)
     except Exception as e:
         print(f"❌ Failed to connect to database: {e}")
         print("⚠️ Bot is running but economy commands will not work until database is available")
@@ -531,7 +538,7 @@ async def add_robux(user_id: int, amount: int) -> None:
 async def daily(ctx):
     """Claim a daily reward of 100,000 Robux (once every 24 hours)."""
     user_id = ctx.author.id
-    now = datetime.now(timezone.utc)
+    now = discord.utils.utcnow()
 
     # Ensure user exists in database
     await get_robux(user_id)
@@ -677,10 +684,12 @@ async def add_to_treasury(amount: int) -> None:
     """Add robux to the bot's treasury."""
     if bot.db is None:
         return
-    await bot.db.execute(
-        "UPDATE treasury SET total_robux = total_robux + $1 WHERE id = 1",
-        amount
-    )
+    await bot.db.execute("""
+        INSERT INTO treasury (id, total_robux) 
+        VALUES (1, $1)
+        ON CONFLICT (id) 
+        DO UPDATE SET total_robux = treasury.total_robux + $1
+    """, amount)
 
 
 async def get_treasury() -> int:
